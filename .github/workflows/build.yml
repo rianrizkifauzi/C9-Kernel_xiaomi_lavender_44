@@ -1257,6 +1257,7 @@ jobs:
 
       - name: Create Release (cross-repo to C9-Kernel_releases)
         if: success() && env.OUTZIP != '' && inputs.enable_lto == 'off' && inputs.enable_polly == 'false' && inputs.ksun_branch != 'next' && !contains(inputs.kernel_relver, 'Test')
+        continue-on-error: true
         uses: softprops/action-gh-release@v2
         with:
           token: ${{ secrets.RELEASES_TOKEN }}
