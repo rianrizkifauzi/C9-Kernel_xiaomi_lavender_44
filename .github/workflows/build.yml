@@ -990,6 +990,65 @@ jobs:
             fi
           fi
 
+      - name: Fix KSU-Next SELinux compat for kernel 4.4
+        if: ${{ inputs.pre_patched_kernel != 'true' }}
+        working-directory: kernel_source
+        run: |
+          set -e
+          echo "=== Fix selinux_state references for kernel 4.4 ==="
+          # Kernel 4.4 does NOT have 'struct selinux_state' (introduced 4.19+).
+          # KSU-Next legacy selinux.c uses selinux_kernel_status_page(&selinux_state)
+          # but on 4.4 the function takes no args: selinux_kernel_status_page(void).
+          # Also selinux_is_initialized(&selinux_state) on 4.4 is just selinux_initialized.
+
+          KV_MAJOR=$(echo "${KERNEL_VERSION}" | cut -d. -f1)
+          KV_MINOR=$(echo "${KERNEL_VERSION}" | cut -d. -f2)
+          echo "  Kernel: ${KERNEL_VERSION} (major=${KV_MAJOR}, minor=${KV_MINOR})"
+
+          # Only apply fix for kernel < 4.19
+          if [ "$KV_MAJOR" -lt 4 ] || ([ "$KV_MAJOR" -eq 4 ] && [ "$KV_MINOR" -lt 19 ]); then
+            echo "  Kernel < 4.19 detected — applying selinux compat patches"
+
+            # Find KSU selinux files
+            KSU_SELINUX=""
+            for cand in "${KSU_DIR}/kernel/selinux/selinux.c" "drivers/kernelsu/selinux/selinux.c"; do
+              if [ -f "$cand" ]; then KSU_SELINUX="$cand"; break; fi
+            done
+
+            if [ -z "$KSU_SELINUX" ]; then
+              echo "  ⚠️  KSU selinux.c not found — skipping"
+            else
+              echo "  Patching: $KSU_SELINUX"
+
+              # Fix 1: selinux_kernel_status_page(&selinux_state) -> selinux_kernel_status_page()
+              if grep -q 'selinux_kernel_status_page(&selinux_state)' "$KSU_SELINUX"; then
+                sed -i 's/selinux_kernel_status_page(&selinux_state)/selinux_kernel_status_page()/g' "$KSU_SELINUX"
+                echo "  ✅ Fixed selinux_kernel_status_page (removed &selinux_state arg)"
+              fi
+
+              # Fix 2: selinux_is_initialized(&selinux_state) -> selinux_initialized
+              if grep -q 'selinux_is_initialized(&selinux_state)' "$KSU_SELINUX"; then
+                sed -i 's/selinux_is_initialized(&selinux_state)/selinux_initialized/g' "$KSU_SELINUX"
+                echo "  ✅ Fixed selinux_is_initialized -> selinux_initialized"
+              fi
+
+              # Fix 3: &selinux_state remaining references (other functions)
+              if grep -q '&selinux_state' "$KSU_SELINUX"; then
+                echo "  ⚠️  Remaining &selinux_state references:"
+                grep -n '&selinux_state' "$KSU_SELINUX"
+                # Generic fix: wrap with version guard
+                sed -i '1i\/* KSU 4.4 compat: selinux_state does not exist */\n#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 19, 0)\nstruct { int initialized; } selinux_state = { .initialized = 1 };\n#endif' "$KSU_SELINUX"
+                echo "  ✅ Injected dummy selinux_state struct for 4.4 compat"
+              fi
+
+              echo ""
+              echo "  === Verification ==="
+              grep -n "selinux_state\|selinux_kernel_status_page\|selinux_is_initialized\|selinux_initialized" "$KSU_SELINUX" | head -15
+            fi
+          else
+            echo "  Kernel >= 4.19 — no selinux compat fix needed"
+          fi
+
       - name: Patch lavender DTS fstab (non-dynamic / legacy partition)
         if: ${{ inputs.legacy_fstab == 'true' }}
         working-directory: kernel_source
