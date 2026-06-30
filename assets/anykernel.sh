@@ -16,32 +16,26 @@ supported.patchlevels=
 '; } # end properties
 
 # shell variables
-block=/dev/block/bootdevice/by-name/boot;
+block=boot;
 is_slot_device=0;
 ramdisk_compression=auto;
 patch_vbmeta_flag=auto;
 
-# Banner
-ui_print " ";
-ui_print "**************************************";
-ui_print "*  C9 Custom Kernel for Lavender     *";
-ui_print "*  Codename: Phoenix                 *";
-ui_print "*  Built by JorianPonomaref          *";
-ui_print "*  Base: Linux 4.4.x + KSUN           *";
-ui_print "*  Source: kucingoranye SDM660       *";
-ui_print "*  Mode: SELinux permissive (test)   *";
-ui_print "**************************************";
-ui_print " ";
-
 ## AnyKernel install
 . tools/ak3-core.sh;
 
-split_boot;
+# Banner (MUST be after ak3-core.sh is sourced)
+ui_print " ";
+ui_print "**************************************";
+ui_print "*  C9 Custom Kernel for Lavender     *";
+ui_print "*  Codename: Blitz                   *";
+ui_print "*  Built by JorianPonomaref          *";
+ui_print "*  Base: Linux 4.4.x + KSUN + CID   *";
+ui_print "*  Source: kucingoranye SDM660       *";
+ui_print "**************************************";
+ui_print " ";
 
-# Patch kernel cmdline to force SELinux permissive
-# This bypasses fstab/sepolicy_vers.txt load issue on incompatible vendor partition
-ui_print "Patching cmdline: androidboot.selinux=permissive";
-patch_cmdline "androidboot.selinux" "androidboot.selinux=permissive";
+split_boot;
 
 flash_boot;
 ## end install
