@@ -15,16 +15,16 @@ supported.versions=
 supported.patchlevels=
 '; } # end properties
 
-# shell variables
-block=boot;
-is_slot_device=0;
-ramdisk_compression=auto;
-patch_vbmeta_flag=auto;
+# shell variables — AnyKernel3 expects UPPERCASE
+BLOCK=/dev/block/bootdevice/by-name/boot;
+IS_SLOT_DEVICE=0;
+RAMDISK_COMPRESSION=auto;
+PATCH_VBMETA_FLAG=auto;
 
 ## AnyKernel install
 . tools/ak3-core.sh;
 
-# Banner (MUST be after ak3-core.sh is sourced)
+# Banner
 ui_print " ";
 ui_print "**************************************";
 ui_print "*  C9 Custom Kernel for Lavender     *";
