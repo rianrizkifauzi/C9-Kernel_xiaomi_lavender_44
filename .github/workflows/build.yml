@@ -24,9 +24,9 @@ on:
         required: true
         default: 'KernelSU-Next/KernelSU-Next'
       ksun_branch:
-        description: 'KernelSU tag/branch. legacy = stable 3.x for non-GKI 4.x kernel.'
+        description: 'KernelSU tag/branch. v3.3.0 = latest stable (recommended) | legacy = rolling non-GKI branch | v3.2.0 = previous stable.'
         required: true
-        default: 'legacy'
+        default: 'v3.3.0'
       ksun_commit:
         description: 'Pin KSU to specific commit SHA (use "head" for branch head).'
         required: true
@@ -945,17 +945,16 @@ jobs:
           if [ -f "$KBUILD_FILE" ]; then
             # Read the actual git tag/commit count from KSU repo
             cd "${KSU_DIR}"
-            KSU_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v3.2.0-legacy")
+            KSU_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v3.3.0")
             KSU_COMMIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo "1000")
             cd ..
 
-            # NOTE: Manager v3.2.0-spoofed bundles ksud version 33129.
-            # We MUST match this to make Shamiko (and other strict modules) accept.
-            # If kernel KSU_VERSION != ksud version, Shamiko aborts with
-            # "KernelSU version abnormal".
-            FORCED_VERSION=33129
-
-            echo "  Forcing KSU_VERSION=$FORCED_VERSION (tag=$KSU_TAG)"
+            # Auto-detect KSU_VERSION from git commit count.
+            # This ensures kernel driver version matches whatever Manager APK
+            # the user installs (v3.2.0=33129, v3.3.0=~33400+, etc).
+            # Shamiko and strict modules check: kernel KSU_VERSION == ksud version.
+            FORCED_VERSION=${KSU_COMMIT_COUNT}
+            echo "  Auto-detected KSU_VERSION=$FORCED_VERSION (tag=$KSU_TAG, commits=$KSU_COMMIT_COUNT)"
             echo "  Appending overrides to $KBUILD_FILE"
             
             # Append at the end of Kbuild to override fallback
@@ -978,8 +977,8 @@ jobs:
             SUPERCALL_FILE="${KSU_DIR}/kernel/supercall/supercall.c"
             if [ -f "$SUPERCALL_FILE" ]; then
               if grep -q "uint32_t ksuver_override = 0;" "$SUPERCALL_FILE"; then
-                sed -i "s|uint32_t ksuver_override = 0;|uint32_t ksuver_override = $FORCED_VERSION;|" "$SUPERCALL_FILE"
-                echo "  ✅ ksuver_override default patched in supercall.c"
+                sed -i "s|uint32_t ksuver_override = 0;|uint32_t ksuver_override = ${FORCED_VERSION};|" "$SUPERCALL_FILE"
+                echo "  ✅ ksuver_override default patched in supercall.c (version=${FORCED_VERSION})"
                 grep "uint32_t ksuver_override" "$SUPERCALL_FILE"
               else
                 echo "  ⚠️  ksuver_override pattern not found in supercall.c"
@@ -1274,7 +1273,7 @@ jobs:
             _• Compiled using Proton Clang (kdrag0n) latest._
             _• Bump to Linux ${{ env.KERNEL_VERSION }} (CIP-LTS)._
             _• Base on `${{ inputs.kernel_repo }}@${{ inputs.kernel_branch }}` (`${{ env.KERNEL_SHA }}`)._
-            _• Integrate KernelSU-Next (`${{ inputs.ksun_branch }}` @ `${{ env.KSUN_VERSION }}`, forced KSU_VERSION 33129)._
+            _• Integrate KernelSU-Next (`${{ inputs.ksun_branch }}` @ `${{ env.KSUN_VERSION }}`, KSU_VERSION=${{ env.FORCED_KSU_VERSION }})._
             _• Apply manual hooks from kucingoranye/kernel_patches (execveat, stat, faccessat, vfs_read, sys_reboot, selinux NNP bypass)._
             _• Backport `path_umount` from kernel 5.10.9 by backslashxx (KSUN driver requirement)._
             _• AnyKernel3 flashable zip with C9 banner._
@@ -1284,8 +1283,8 @@ jobs:
             Tested on:
             _• Xiaomi Redmi Note 7 (Lavender / SDM660)._
             _• Android 11 / crDroid 7.x base ROM._
-            _• KernelSU-Next Manager v3.2.0-spoofed (33129) → Working._
-            _• Zygisk Next 1.3.4-746 → daemon running, both zygote injected._
+            _• KernelSU-Next Manager v3.3.0 (KSU_VERSION=${{ env.FORCED_KSU_VERSION }}) → Working._
+            _• Zygisk Next latest → daemon running, both zygote injected._
 
             Full changelog : [CHANGELOG.md](https://github.com/rianrizkifauzi/C9-Kernel_xiaomi_lavender_419/blob/main/CHANGELOG.md)
             Build pipeline : [Run #${{ github.run_number }}](https://github.com/rianrizkifauzi/C9-Kernel_xiaomi_lavender_419/actions/runs/${{ github.run_id }})

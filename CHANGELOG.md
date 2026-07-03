@@ -2,6 +2,15 @@ C9-Kernel-linux version-4.4
 Codename: Phoenix
 Type: Stable
 
+Changelog R2.0 :
+
+_• Upgrade KernelSU-Next driver from legacy (v3.2.0) to v3.3.0 (latest stable)._
+_• Auto-detect KSU_VERSION from git commit count (no more hardcoded 33129)._
+_• Now compatible with KernelSU-Next Manager v3.3.0 official (selinux_hide, allowlist refactor, strncpy removal, symbol resolver improvements)._
+_• SELinux compat patch updated for v3.3.0 driver changes (selinux_hide + attr/current detection)._
+_• ksuver_override in supercall.c now auto-patched to match detected version._
+_• Release notes now show actual KSU_VERSION in GitHub Release body._
+
 Changelog R1.0 :
 
 _• First public release of C9-Kernel 4.4 for Xiaomi Redmi Note 7 (Lavender)._
@@ -10,7 +19,7 @@ _• Linux 4.4.x San-Kernel SDM660 lineage (latest CLO/CIP-LTS tags merged)._
 _• Base on kucingoranye/android_kernel_xiaomi_sdm660_44 @ manual-hook-rksu-ksun branch._
 _• Source ships pre-patched manual KSU hooks + path_umount backport (rebased from kucingoranye/kernel_patches kernel-4.4_4.9)._
 _• Integrate KernelSU-Next legacy as non-GKI root solution (cloned via official setup.sh)._
-_• Force KSU_VERSION to 33129 to match Manager v3.2.0-spoofed bundled ksud._
+_• Force KSU_VERSION to 33129 to match Manager v3.2.0-spoofed bundled ksud (superseded by R2.0 auto-detect)._
 _• Link with GNU ld (ld.lld produces empty built-in.o on 4.4)._
 _• Add C9 branding: CONFIG_LOCALVERSION="-C9-Phoenix-KSUN-R1.0"._
 _• Build identity: JorianPonomaref@lavender44-actions._
