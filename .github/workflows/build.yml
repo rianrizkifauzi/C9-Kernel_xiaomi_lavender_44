@@ -78,13 +78,13 @@ on:
         type: choice
         options: ['true', 'false']
       kernel_codename:
-        description: 'Kernel codename (San-Kernel style branding, e.g. Phoenix, Sentinel, Aether)'
+        description: 'Kernel codename (San-Kernel style branding, e.g. Blitz, Phoenix, Sentinel)'
         required: false
-        default: 'Phoenix'
+        default: 'Blitz'
       kernel_relver:
         description: 'Kernel release version (San-Kernel style, e.g. R1.0, R1.1.101)'
         required: false
-        default: 'R1.0'
+        default: 'R1.2'
       enable_lto:
         description: 'LTO mode (off=no LTO, thin=ThinLTO parallel, full=Full LTO max optimize). WARNING: full LTO needs 16GB+ RAM and 2-3x build time.'
         required: false
@@ -954,7 +954,16 @@ jobs:
             # the user installs (v3.2.0=33129, v3.3.0=~33400+, etc).
             # Shamiko and strict modules check: kernel KSU_VERSION == ksud version.
             FORCED_VERSION=${KSU_COMMIT_COUNT}
-            echo "  Auto-detected KSU_VERSION=$FORCED_VERSION (tag=$KSU_TAG, commits=$KSU_COMMIT_COUNT)"
+            # Compatibility floor: KSU-Next Manager v3.3.0 = versionCode 33214.
+            # If the (pinned/legacy) driver reports a lower commit count, spoof up
+            # to 33214 so the LATEST manager accepts the driver ("Working").
+            MGR_MIN=33214
+            if ! echo "$FORCED_VERSION" | grep -Eq '^[0-9]+$'; then FORCED_VERSION=$MGR_MIN; fi
+            if [ "$FORCED_VERSION" -lt "$MGR_MIN" ]; then
+              echo "  Driver version $FORCED_VERSION < manager floor $MGR_MIN -> spoofing to $MGR_MIN"
+              FORCED_VERSION=$MGR_MIN
+            fi
+            echo "  KSU_VERSION=$FORCED_VERSION (tag=$KSU_TAG, commits=$KSU_COMMIT_COUNT, mgr_floor=$MGR_MIN)"
             echo "  Appending overrides to $KBUILD_FILE"
             
             # Append at the end of Kbuild to override fallback
