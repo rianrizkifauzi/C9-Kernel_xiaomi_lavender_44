@@ -1057,6 +1057,45 @@ jobs:
             echo "  Kernel >= 4.19 — no selinux compat fix needed"
           fi
 
+      - name: Fix KSU-Next header compat for kernel 4.4
+        if: ${{ inputs.pre_patched_kernel != 'true' }}
+        working-directory: kernel_source
+        run: |
+          set -e
+          echo "=== Fix missing headers for kernel < 4.14 ==="
+          KV_MAJOR=$(echo "${KERNEL_VERSION}" | cut -d. -f1)
+          KV_MINOR=$(echo "${KERNEL_VERSION}" | cut -d. -f2)
+
+          if [ "$KV_MAJOR" -lt 4 ] || ([ "$KV_MAJOR" -eq 4 ] && [ "$KV_MINOR" -lt 14 ]); then
+            echo "  Kernel < 4.14 — fixing compiler_types.h includes"
+
+            # linux/compiler_types.h was split from linux/compiler.h in 4.14
+            # Replace all occurrences in KSU source with linux/compiler.h
+            KSU_KERNEL_DIR=""
+            for cand in "${KSU_DIR}/kernel" "drivers/kernelsu"; do
+              if [ -d "$cand" ]; then KSU_KERNEL_DIR="$cand"; break; fi
+            done
+
+            if [ -n "$KSU_KERNEL_DIR" ]; then
+              FIXED=0
+              while IFS= read -r f; do
+                sed -i 's|#include <linux/compiler_types.h>|#include <linux/compiler.h>|g' "$f"
+                echo "  ✅ Fixed: $f"
+                FIXED=$((FIXED + 1))
+              done < <(grep -rl 'linux/compiler_types.h' "$KSU_KERNEL_DIR" 2>/dev/null || true)
+
+              if [ "$FIXED" -eq 0 ]; then
+                echo "  No compiler_types.h includes found — OK"
+              else
+                echo "  Fixed $FIXED file(s)"
+              fi
+            else
+              echo "  ⚠️  KSU kernel dir not found"
+            fi
+          else
+            echo "  Kernel >= 4.14 — no header compat fix needed"
+          fi
+
       - name: Patch lavender DTS fstab (non-dynamic / legacy partition)
         if: ${{ inputs.legacy_fstab == 'true' }}
         working-directory: kernel_source
