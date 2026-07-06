@@ -1013,6 +1013,71 @@ jobs:
             fi
           fi
 
+      - name: Patch KSU UAPI version for Manager v3.3.0 compat
+        if: ${{ inputs.pre_patched_kernel != 'true' }}
+        working-directory: kernel_source
+        run: |
+          set -e
+          echo "=== Patch UAPI version into KSU source ==="
+
+          # Find KSU directory
+          KSU_KERNEL_DIR=""
+          for cand in "${KSU_DIR}/kernel" "drivers/kernelsu"; do
+            if [ -d "$cand" ]; then KSU_KERNEL_DIR="$cand"; break; fi
+          done
+          if [ -z "$KSU_KERNEL_DIR" ]; then
+            echo "  ⚠️  KSU kernel dir not found — skipping"
+            exit 0
+          fi
+
+          # 1. Add KERNEL_SU_UAPI_VERSION to uapi/supercall.h if missing
+          UAPI_HEADER=""
+          for h in "${KSU_DIR}/uapi/supercall.h" "uapi/supercall.h" "${KSU_KERNEL_DIR}/include/uapi/supercall.h"; do
+            if [ -f "$h" ]; then UAPI_HEADER="$h"; break; fi
+          done
+
+          if [ -n "$UAPI_HEADER" ]; then
+            if ! grep -q 'KERNEL_SU_UAPI_VERSION' "$UAPI_HEADER"; then
+              echo "  Patching $UAPI_HEADER — adding KERNEL_SU_UAPI_VERSION"
+              sed -i '/#define __KSU_UAPI_SUPERCALL_H/a\\n// UAPI version for Manager compat\nstatic const __u32 KERNEL_SU_UAPI_VERSION = 2;' "$UAPI_HEADER"
+              echo "  ✅ Added KERNEL_SU_UAPI_VERSION=2"
+            else
+              echo "  KERNEL_SU_UAPI_VERSION already defined"
+            fi
+
+            # 2. Add uapi_version field to ksu_get_info_cmd if missing
+            if ! grep -q 'uapi_version' "$UAPI_HEADER"; then
+              echo "  Adding uapi_version field to ksu_get_info_cmd"
+              sed -i '/\s*__u32 features;.*Output: max feature ID/a\    __u32 uapi_version; /* Output: KERNEL_SU_UAPI_VERSION */' "$UAPI_HEADER"
+              echo "  ✅ Added uapi_version field"
+            else
+              echo "  uapi_version field already exists"
+            fi
+          else
+            echo "  ⚠️  uapi/supercall.h not found"
+          fi
+
+          # 3. Patch do_get_info in dispatch.c to populate uapi_version
+          DISPATCH=""
+          for d in "${KSU_KERNEL_DIR}/supercall/dispatch.c" "${KSU_KERNEL_DIR}/dispatch.c"; do
+            if [ -f "$d" ]; then DISPATCH="$d"; break; fi
+          done
+
+          if [ -n "$DISPATCH" ]; then
+            if ! grep -q 'uapi_version' "$DISPATCH"; then
+              echo "  Patching $DISPATCH — adding uapi_version assignment"
+              # Insert after "cmd.features = KSU_FEATURE_MAX;"
+              sed -i '/cmd\.features = KSU_FEATURE_MAX;/a\\tcmd.uapi_version = KERNEL_SU_UAPI_VERSION;' "$DISPATCH"
+              echo "  ✅ Patched do_get_info"
+            else
+              echo "  uapi_version already set in dispatch.c"
+            fi
+          else
+            echo "  ⚠️  dispatch.c not found"
+          fi
+
+          echo "  === UAPI patch complete ==="
+
       - name: Fix KSU-Next SELinux compat for kernel 4.4
         if: ${{ inputs.pre_patched_kernel != 'true' }}
         working-directory: kernel_source
