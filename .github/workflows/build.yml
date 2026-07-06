@@ -1506,6 +1506,30 @@ jobs:
             fi
           fi
 
+          # === Fix 6: asm/set_memory.h (arm64 split at 4.13) ===
+          # KSU-Next legacy feature/selinux_hide.c includes <asm/set_memory.h>.
+          # On 4.4 set_memory_* live in <asm/cacheflush.h>. Provide a stub header
+          # in the kernel tree so the include resolves for the whole build.
+          if [ "$KV_MAJOR" -lt 4 ] || ([ "$KV_MAJOR" -eq 4 ] && [ "$KV_MINOR" -lt 13 ]); then
+            echo ""
+            echo "  --- Fix 6: asm/set_memory.h stub (kernel < 4.13) ---"
+            SM_HDR="arch/arm64/include/asm/set_memory.h"
+            if [ ! -f "$SM_HDR" ]; then
+              cat > "$SM_HDR" << 'SM_EOF'
+          #ifndef _KSU_COMPAT_ASM_SET_MEMORY_H
+          #define _KSU_COMPAT_ASM_SET_MEMORY_H
+          /* 4.4 compat: set_memory_* declared in asm/cacheflush.h before 4.13 split */
+          #include <asm/cacheflush.h>
+          #endif
+          SM_EOF
+              sed -i 's/^          //' "$SM_HDR"
+              echo "    ✅ Created stub $SM_HDR"
+              FIXES=$((FIXES + 1))
+            else
+              echo "    (set_memory.h already exists)"
+            fi
+          fi
+
           echo ""
           echo "  === Total fixes applied: $FIXES ==="
 
