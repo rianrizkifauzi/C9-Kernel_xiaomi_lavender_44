@@ -352,6 +352,19 @@ jobs:
           fi
 
           cd "${KSU_DIR}"
+
+          # Pin to specific commit if ksun_commit != "head"
+          KSU_COMMIT="${{ inputs.ksun_commit }}"
+          if [ "$KSU_COMMIT" != "head" ] && [ -n "$KSU_COMMIT" ]; then
+            echo "  Pinning KSU to commit: $KSU_COMMIT"
+            git fetch --unshallow 2>/dev/null || true
+            git checkout "$KSU_COMMIT" || {
+              echo "::error::Failed to checkout KSU commit $KSU_COMMIT"
+              exit 1
+            }
+            echo "  ✅ KSU pinned to $(git rev-parse --short HEAD)"
+          fi
+
           KSUN_VER=$(git describe --tags --abbrev=0 2>/dev/null || git rev-parse --short HEAD)
           echo "KSUN_VERSION=${KSUN_VER}" >> $GITHUB_ENV
           echo "KSU_DIR=${KSU_DIR}" >> $GITHUB_ENV
