@@ -8,9 +8,9 @@ on:
         required: true
         default: 'kucingoranye/android_kernel_xiaomi_sdm660_44'
       kernel_branch:
-        description: 'Kernel source branch (manual-hook-rksu-ksun=pre-patched manual hook+umount RECOMMENDED | android-4.4-stable=clean San-Kernel 4.4)'
+        description: 'Kernel source branch. android-4.4-stable=CLEAN San-Kernel 4.4 (REQUIRED for backslashxx hooks) | manual-hook-rksu-ksun=pre-patched legacy hook (only for hook_strategy=none)'
         required: true
-        default: 'manual-hook-rksu-ksun'
+        default: 'android-4.4-stable'
       kernel_commit:
         description: 'Pin kernel source to specific commit SHA (use "head" for latest).'
         required: true
@@ -24,9 +24,9 @@ on:
         required: true
         default: 'KernelSU-Next/KernelSU-Next'
       ksun_branch:
-        description: 'KernelSU tag/branch. v3.3.0 = latest stable (recommended) | legacy = rolling non-GKI branch | v3.2.0 = previous stable.'
+        description: 'KernelSU tag/branch. legacy = rolling non-GKI branch (REQUIRED for non-GKI 4.4 + latest Manager, per KSU-Next dev) | v3.3.0 = GKI stable (breaks non-GKI hook) | v3.2.0 = previous.'
         required: true
-        default: 'v3.3.0'
+        default: 'legacy'
       ksun_commit:
         description: 'Pin KSU to specific commit SHA (use "head" for branch head).'
         required: true
@@ -42,11 +42,11 @@ on:
         type: choice
         options: ['true', 'false']
       hook_strategy:
-        description: 'Hook strategy: none (RECOMMENDED if kernel pre-patched like kucingoranye branch) | kucingoranye_patch (apply patch) | minimal | full'
+        description: 'Hook strategy: backslashxx (RECOMMENDED for LATEST manager on non-GKI: backslashxx/JackA1ltman minimal syscall hooks) | none (kernel pre-patched) | kucingoranye_patch (legacy manual hook, NOT compatible w/ latest manager) | minimal | full'
         required: true
-        default: 'none'
+        default: 'backslashxx'
         type: choice
-        options: ['kucingoranye_patch', 'minimal', 'full', 'none']
+        options: ['backslashxx', 'kucingoranye_patch', 'minimal', 'full', 'none']
       pre_patched_kernel:
         description: 'Skip cloning KernelSU + skip applying patches if true. Set FALSE for manual-hook-rksu-ksun branch (hooks pre-patched but KSU driver still needs cloning).'
         required: false
@@ -493,6 +493,63 @@ jobs:
           # Patch should have already added these to lavender_defconfig
           DCFG_PATH="${DCFG_PATH:-arch/arm64/configs/lavender_defconfig}"
           grep -E "CONFIG_KSU|CONFIG_KPROBES" "$DCFG_PATH" || echo "  (no KSU/KPROBES lines yet)"
+
+      - name: Apply backslashxx minimal syscall hooks (RECOMMENDED for latest Manager)
+        if: ${{ inputs.hook_strategy == 'backslashxx' && inputs.pre_patched_kernel != 'true' }}
+        working-directory: kernel_source
+        run: |
+          set -e
+          echo "=== Strategy: backslashxx / JackA1ltman minimal syscall hooks ==="
+          echo "This is the KSU-Next-dev-recommended hook method for non-GKI + latest Manager."
+          echo "Source (vendored): builder/assets/syscall_hook_patches.sh"
+          echo ""
+
+          # The patch script greps drivers/kernelsu/ to decide which hooks the driver
+          # actually exports. KSU-Next setup.sh usually creates this symlink; ensure it.
+          if [ ! -e drivers/kernelsu ]; then
+            KSU_KDIR=""
+            for cand in "${KSU_DIR}/kernel" "KernelSU-Next/kernel" "KernelSU/kernel"; do
+              if [ -d "$cand" ]; then KSU_KDIR="$cand"; break; fi
+            done
+            if [ -n "$KSU_KDIR" ]; then
+              ln -sf "$(realpath --relative-to=drivers "$KSU_KDIR")" drivers/kernelsu
+              echo "  Created symlink drivers/kernelsu -> $KSU_KDIR"
+            else
+              echo "::error::Cannot locate KSU kernel dir to symlink drivers/kernelsu"
+              exit 1
+            fi
+          fi
+          echo "  drivers/kernelsu resolves to: $(readlink -f drivers/kernelsu 2>/dev/null || echo '?')"
+          echo "  KSU exported ksu_handle_* symbols:"
+          grep -rho "ksu_handle_[a-z_]*" drivers/kernelsu/ 2>/dev/null | sort -u | head -30 || true
+          echo ""
+
+          # Guard: source MUST be clean (no pre-existing ksu hooks). If the branch is
+          # pre-patched (manual-hook-rksu-ksun), backslashxx skips those files -> mixed/broken.
+          PREEXIST=$(grep -rl "ksu_handle_execveat\|ksu_handle_faccessat" fs/ 2>/dev/null || true)
+          if [ -n "$PREEXIST" ]; then
+            echo "::error::Kernel source already contains KSU hooks in: $PREEXIST"
+            echo "::error::Use a CLEAN branch (android-4.4-stable) with hook_strategy=backslashxx."
+            exit 1
+          fi
+
+          cp "$GITHUB_WORKSPACE/builder/assets/syscall_hook_patches.sh" /tmp/syscall_hook_patches.sh
+          chmod +x /tmp/syscall_hook_patches.sh
+          bash /tmp/syscall_hook_patches.sh
+
+          echo ""
+          echo "=== Verify hooks landed ==="
+          FAIL=0
+          for f in fs/exec.c fs/open.c fs/stat.c; do
+            n=$(grep -c "ksu_handle_" "$f" 2>/dev/null || echo 0)
+            echo "  $f: $n ksu_handle refs"
+            [ "$n" -eq 0 ] && FAIL=1
+          done
+          if [ "$FAIL" -eq 1 ]; then
+            echo "::error::Core hook (exec/open/stat) missing after backslashxx patch — aborting."
+            exit 1
+          fi
+          echo "  ✅ Core syscall hooks present."
 
       - name: Inject MINIMAL execveat hook into clean kernel source
         if: ${{ env.KSU_HOOK_MODE == 'minimal_inject' && inputs.ksun_repo == 'rsuntk/KernelSU' && inputs.hook_strategy == 'minimal' }}
