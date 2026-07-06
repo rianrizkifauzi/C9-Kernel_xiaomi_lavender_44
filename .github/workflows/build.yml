@@ -1043,6 +1043,7 @@ jobs:
           uapi = os.environ.get('UAPI_HEADER', '')
           dispatch = os.environ.get('DISPATCH', '')
 
+          # ============ PATCH supercall.h ============
           if uapi and os.path.isfile(uapi):
               with open(uapi, 'r') as f:
                   content = f.read()
@@ -1067,28 +1068,125 @@ jobs:
                   print(f'  ✅ Added uapi_version field to ksu_get_info_cmd')
                   modified = True
 
+              # 3. Fix KSU_IOCTL_GET_INFO to use _IOR with struct size
+              #    Old: _IOC(_IOC_READ, 'K', 2, 0) — size=0
+              #    New: _IOR('K', 2, struct ksu_get_info_cmd) — size=16
+              #    Manager v3.3.0 sends the new one, so we MUST match.
+              old_get_info = "_IOC(_IOC_READ, 'K', 2, 0)"
+              new_get_info = "_IOR('K', 2, struct ksu_get_info_cmd)"
+              if old_get_info in content and new_get_info not in content:
+                  # Rename old to LEGACY, add new as primary
+                  content = content.replace(
+                      "static const __u32 KSU_IOCTL_GET_INFO = " + old_get_info + ";",
+                      "static const __u32 KSU_IOCTL_GET_INFO = " + new_get_info + ";\n"
+                      "/* Legacy ioctl (size=0) for old managers */\n"
+                      "static const __u32 KSU_IOCTL_GET_INFO_LEGACY = " + old_get_info + ";",
+                  )
+                  print(f'  ✅ Updated KSU_IOCTL_GET_INFO to use _IOR with struct size')
+                  modified = True
+
               if modified:
                   with open(uapi, 'w') as f:
                       f.write(content)
               else:
-                  print('  Header already patched')
+                  print('  Header already fully patched')
           else:
               print(f'  ⚠️  uapi header not found: {uapi}')
 
+          # ============ PATCH dispatch.c ============
           if dispatch and os.path.isfile(dispatch):
               with open(dispatch, 'r') as f:
                   content = f.read()
 
+              modified = False
+
+              # 1. Add uapi_version assignment in do_get_info
               if 'uapi_version' not in content:
                   content = content.replace(
                       'cmd.features = KSU_FEATURE_MAX;',
                       'cmd.features = KSU_FEATURE_MAX;\n\tcmd.uapi_version = KERNEL_SU_UAPI_VERSION;',
                   )
+                  print(f'  ✅ Added uapi_version assignment in do_get_info')
+                  modified = True
+
+              # 2. Register legacy ioctl handler so both old+new ioctl numbers work
+              if 'KSU_IOCTL_GET_INFO_LEGACY' not in content:
+                  # Add legacy handler entry right after the GET_INFO entry
+                  old_entry = (
+                      '{\n'
+                      '        .cmd = KSU_IOCTL_GET_INFO,\n'
+                      '        .name = "GET_INFO",\n'
+                      '        .handler = do_get_info,\n'
+                      '        .perm_check = always_allow\n'
+                      '    },'
+                  )
+                  new_entry = (
+                      '{\n'
+                      '        .cmd = KSU_IOCTL_GET_INFO,\n'
+                      '        .name = "GET_INFO",\n'
+                      '        .handler = do_get_info,\n'
+                      '        .perm_check = always_allow\n'
+                      '    },\n'
+                      '    {\n'
+                      '        .cmd = KSU_IOCTL_GET_INFO_LEGACY,\n'
+                      '        .name = "GET_INFO_LEGACY",\n'
+                      '        .handler = do_get_info,\n'
+                      '        .perm_check = always_allow\n'
+                      '    },'
+                  )
+                  if old_entry in content:
+                      content = content.replace(old_entry, new_entry)
+                      print(f'  ✅ Added KSU_IOCTL_GET_INFO_LEGACY handler (exact match)')
+                      modified = True
+                  else:
+                      # Try tab-indented variant
+                      old_tab = (
+                          '{\n'
+                          '\t\t.cmd = KSU_IOCTL_GET_INFO,\n'
+                          '\t\t.name = "GET_INFO",\n'
+                          '\t\t.handler = do_get_info,\n'
+                          '\t\t.perm_check = always_allow\n'
+                          '\t},'
+                      )
+                      new_tab = (
+                          '{\n'
+                          '\t\t.cmd = KSU_IOCTL_GET_INFO,\n'
+                          '\t\t.name = "GET_INFO",\n'
+                          '\t\t.handler = do_get_info,\n'
+                          '\t\t.perm_check = always_allow\n'
+                          '\t},\n'
+                          '\t{\n'
+                          '\t\t.cmd = KSU_IOCTL_GET_INFO_LEGACY,\n'
+                          '\t\t.name = "GET_INFO_LEGACY",\n'
+                          '\t\t.handler = do_get_info,\n'
+                          '\t\t.perm_check = always_allow\n'
+                          '\t},'
+                      )
+                      if old_tab in content:
+                          content = content.replace(old_tab, new_tab)
+                          print(f'  ✅ Added KSU_IOCTL_GET_INFO_LEGACY handler (tab match)')
+                          modified = True
+                      else:
+                          # Fallback: just insert line after GET_INFO handler via regex
+                          import re
+                          pattern = r'(\.cmd\s*=\s*KSU_IOCTL_GET_INFO\b.*?\.perm_check\s*=\s*always_allow\s*\n\s*\},)'
+                          repl = (r'\1\n    {\n        .cmd = KSU_IOCTL_GET_INFO_LEGACY,\n'
+                                  r'        .name = "GET_INFO_LEGACY",\n'
+                                  r'        .handler = do_get_info,\n'
+                                  r'        .perm_check = always_allow\n    },')
+                          new_content = re.sub(pattern, repl, content, count=1, flags=re.DOTALL)
+                          if new_content != content:
+                              content = new_content
+                              print(f'  ✅ Added KSU_IOCTL_GET_INFO_LEGACY handler (regex)')
+                              modified = True
+                          else:
+                              print(f'  ⚠️  Could not find GET_INFO handler entry to duplicate')
+
+              if modified:
                   with open(dispatch, 'w') as f:
                       f.write(content)
-                  print(f'  ✅ Patched do_get_info in {dispatch}')
               else:
-                  print('  dispatch.c already patched')
+                  print('  dispatch.c already fully patched')
           else:
               print(f'  ⚠️  dispatch.c not found: {dispatch}')
           PYEOF
