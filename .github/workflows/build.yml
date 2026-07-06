@@ -1173,6 +1173,25 @@ jobs:
             done < <(grep -rlP 'struct wait_queue_head[^_]' "$KSU_KERNEL_DIR" 2>/dev/null || true)
           fi
 
+          # === Fix 4: split sched headers (kernel 4.11 split linux/sched.h) ===
+          if [ "$KV_MAJOR" -lt 4 ] || ([ "$KV_MAJOR" -eq 4 ] && [ "$KV_MINOR" -lt 11 ]); then
+            echo ""
+            echo "  --- Fix 4: sched header split compat (kernel < 4.11) ---"
+
+            # These headers were split out from linux/sched.h in 4.11:
+            # linux/sched/signal.h, linux/sched/mm.h, linux/sched/task.h,
+            # linux/sched/clock.h, linux/sched/types.h, etc.
+            SCHED_HEADERS="linux/sched/signal.h linux/sched/mm.h linux/sched/task.h linux/sched/clock.h linux/sched/types.h linux/sched/task_stack.h linux/sched/cputime.h"
+
+            for hdr in $SCHED_HEADERS; do
+              while IFS= read -r f; do
+                sed -i "s|#include <${hdr}>|#include <linux/sched.h>|g" "$f"
+                echo "    ✅ $f: ${hdr} → linux/sched.h"
+                FIXES=$((FIXES + 1))
+              done < <(grep -rl "${hdr}" "$KSU_KERNEL_DIR" 2>/dev/null || true)
+            done
+          fi
+
           echo ""
           echo "  === Total fixes applied: $FIXES ==="
 
