@@ -1444,6 +1444,33 @@ jobs:
             done
           fi
 
+          # === Fix 5: in_compat_syscall() (introduced kernel 4.6) ===
+          # KSU-Next legacy sulog/event.c uses in_compat_syscall(); not present on 4.4.
+          # Prepend a self-contained shim (maps to is_compat_task, arm64 CONFIG_COMPAT=y).
+          if [ "$KV_MAJOR" -lt 4 ] || ([ "$KV_MAJOR" -eq 4 ] && [ "$KV_MINOR" -lt 6 ]); then
+            echo ""
+            echo "  --- Fix 5: in_compat_syscall compat (kernel < 4.6) ---"
+            while IFS= read -r f; do
+              if ! grep -q 'KSU_COMPAT_IN_COMPAT_SYSCALL' "$f"; then
+                tmp=$(mktemp)
+                cat > "$tmp" << 'SHIM_EOF'
+          #include <linux/compat.h>
+          #ifndef KSU_COMPAT_IN_COMPAT_SYSCALL
+          #define KSU_COMPAT_IN_COMPAT_SYSCALL
+          #ifndef in_compat_syscall
+          #define in_compat_syscall() is_compat_task()
+          #endif
+          #endif
+          SHIM_EOF
+                sed -i 's/^          //' "$tmp"
+                cat "$f" >> "$tmp"
+                mv "$tmp" "$f"
+                echo "    ✅ shim in_compat_syscall: $f"
+                FIXES=$((FIXES + 1))
+              fi
+            done < <(grep -rlE 'in_compat_syscall' "$KSU_KERNEL_DIR" 2>/dev/null || true)
+          fi
+
           echo ""
           echo "  === Total fixes applied: $FIXES ==="
 
