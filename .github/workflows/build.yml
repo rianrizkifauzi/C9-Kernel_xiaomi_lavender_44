@@ -987,8 +987,6 @@ jobs:
               echo "ccflags-y += -DKSU_VERSION=$FORCED_VERSION"
               echo "ccflags-y += -UKSU_VERSION_TAG"
               echo "ccflags-y += -DKSU_VERSION_TAG=\\\"$KSU_TAG\\\""
-              echo "# Force UAPI version for Manager v3.3.0+ compat (expects uapi=2)"
-              echo "ccflags-y += -DKERNEL_SU_UAPI_VERSION=2"
             } >> "$KBUILD_FILE"
             
             echo "  ✅ KSU_VERSION forced to $FORCED_VERSION"
