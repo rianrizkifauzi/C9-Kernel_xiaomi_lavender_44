@@ -1588,6 +1588,104 @@ jobs:
           echo "=== After patch (fstab section) ==="
           grep -n -A20 "fstab {" "$DTSI" | head -30 || true
 
+      - name: Backport path_umount into fs/namespace.c (pre-build, avoid link race)
+        if: ${{ inputs.pre_patched_kernel != 'true' }}
+        working-directory: kernel_source
+        run: |
+          set -e
+          # KSU-Next Kbuild self-injects can_umount/path_umount into fs/namespace.c,
+          # but that runs when make descends into drivers/ — AFTER fs/namespace.o is
+          # already compiled → "undefined reference to path_umount" at final link.
+          # Inject here (before Build) so namespace.o is compiled WITH path_umount.
+          NS="fs/namespace.c"
+          INT="fs/internal.h"
+          if [ ! -f "$NS" ]; then echo "::error::$NS missing"; exit 1; fi
+
+          python3 - << 'PYEOF'
+          import re, io
+          ns_path = "fs/namespace.c"
+          src = open(ns_path).read()
+
+          anchor = re.search(r'^static bool is_mnt_ns_file', src, re.M)
+          if not anchor:
+              print("::warning::is_mnt_ns_file anchor not found; trying alt anchor")
+
+          can_umount = r'''static int can_umount(const struct path *path, int flags)
+          {
+          	struct mount *mnt = real_mount(path->mnt);
+          	if (flags & ~(MNT_FORCE | MNT_DETACH | MNT_EXPIRE | UMOUNT_NOFOLLOW))
+          		return -EINVAL;
+          	if (!may_mount())
+          		return -EPERM;
+          	if (path->dentry != path->mnt->mnt_root)
+          		return -EINVAL;
+          	if (!check_mnt(mnt))
+          		return -EINVAL;
+          	if (mnt->mnt.mnt_flags & MNT_LOCKED)
+          		return -EINVAL;
+          	if (flags & MNT_FORCE && !capable(CAP_SYS_ADMIN))
+          		return -EPERM;
+          	return 0;
+          }
+          '''
+
+          path_umount = r'''int path_umount(struct path *path, int flags)
+          {
+          	struct mount *mnt = real_mount(path->mnt);
+          	int ret;
+          	ret = can_umount(path, flags);
+          	if (!ret)
+          		ret = do_umount(mnt, flags);
+          	dput(path->dentry);
+          	mntput_no_expire(mnt);
+          	return ret;
+          }
+          '''
+          # strip the leading 10-space indentation from the heredoc
+          can_umount = "\n".join(l[10:] if l.startswith(" "*10) else l for l in can_umount.splitlines()) + "\n"
+          path_umount = "\n".join(l[10:] if l.startswith(" "*10) else l for l in path_umount.splitlines()) + "\n"
+
+          inject = ""
+          if not re.search(r'^static int can_umount', src, re.M):
+              inject += can_umount + "\n"
+          else:
+              print("can_umount already present")
+          if not re.search(r'^int path_umount', src, re.M):
+              inject += path_umount + "\n"
+          else:
+              print("path_umount already present")
+
+          if inject:
+              if anchor:
+                  pos = anchor.start()
+                  src = src[:pos] + inject + src[pos:]
+              else:
+                  src = src + "\n" + inject
+              open(ns_path, "w").write(src)
+              print("Injected can_umount/path_umount into", ns_path)
+
+          # internal.h declaration
+          try:
+              ih = open("fs/internal.h").read()
+              if not re.search(r'^int path_umount', ih, re.M):
+                  m = re.search(r'^extern void __init mnt_init.*$', ih, re.M)
+                  decl = "int path_umount(struct path *path, int flags);\n"
+                  if m:
+                      e = m.end()
+                      ih = ih[:e] + "\n" + decl + ih[e:]
+                  else:
+                      ih = ih + "\n" + decl
+                  open("fs/internal.h", "w").write(ih)
+                  print("Added path_umount decl to fs/internal.h")
+              else:
+                  print("path_umount decl already in internal.h")
+          except FileNotFoundError:
+              print("::warning::fs/internal.h not found")
+          PYEOF
+
+          echo "=== Verify ==="
+          grep -n "^int path_umount\|^static int can_umount" "$NS" || echo "  (not found — check)"
+
       - name: Build kernel
         working-directory: kernel_source
         env:
