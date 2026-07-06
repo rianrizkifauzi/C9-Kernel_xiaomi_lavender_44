@@ -1309,6 +1309,42 @@ jobs:
             echo "  Kernel >= 4.19 — no selinux compat fix needed"
           fi
 
+      - name: Stub KSU-Next selinux_hide for kernel < 4.19
+        if: ${{ inputs.pre_patched_kernel != 'true' }}
+        working-directory: kernel_source
+        run: |
+          set -e
+          KV_MAJOR=$(echo "${KERNEL_VERSION}" | cut -d. -f1)
+          KV_MINOR=$(echo "${KERNEL_VERSION}" | cut -d. -f2)
+          # feature/selinux_hide.c relies on newer-kernel internals unavailable/unsafe
+          # on 4.4/4.9: __nocfi, struct selinux_state, security_secctx_to_secid,
+          # set_memory/vmap fops runtime patching. It is an OPTIONAL anti-detection
+          # feature (fakes /sys/fs/selinux/status) — NOT needed for root grant or
+          # Manager integration. Replace with a no-op stub to avoid the compat hell.
+          if [ "$KV_MAJOR" -lt 4 ] || ([ "$KV_MAJOR" -eq 4 ] && [ "$KV_MINOR" -lt 19 ]); then
+            SH=""
+            for cand in "${KSU_DIR}/kernel/feature/selinux_hide.c" "drivers/kernelsu/feature/selinux_hide.c"; do
+              if [ -f "$cand" ]; then SH="$cand"; break; fi
+            done
+            if [ -n "$SH" ]; then
+              cat > "$SH" << 'STUB_EOF'
+          /* KSU-Next selinux_hide: stubbed for kernel < 4.19 (C9 builder).
+           * Original relies on __nocfi / selinux_state / security_secctx_to_secid /
+           * fops runtime patching not available or unsafe on 4.4. Optional feature. */
+          #include <linux/init.h>
+          void __init ksu_selinux_hide_init(void) {}
+          void __exit ksu_selinux_hide_exit(void) {}
+          STUB_EOF
+              sed -i 's/^          //' "$SH"
+              echo "✅ Stubbed selinux_hide.c at $SH"
+              cat "$SH"
+            else
+              echo "::warning::selinux_hide.c not found — nothing to stub"
+            fi
+          else
+            echo "Kernel >= 4.19 — keeping original selinux_hide.c"
+          fi
+
       - name: Fix KSU-Next header compat for kernel 4.4
         if: ${{ inputs.pre_patched_kernel != 'true' }}
         working-directory: kernel_source
