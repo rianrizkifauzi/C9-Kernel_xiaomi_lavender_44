@@ -1062,39 +1062,120 @@ jobs:
         working-directory: kernel_source
         run: |
           set -e
-          echo "=== Fix missing headers for kernel < 4.14 ==="
+          echo "=== Fix KSU-Next compat for kernel < 4.16 ==="
           KV_MAJOR=$(echo "${KERNEL_VERSION}" | cut -d. -f1)
           KV_MINOR=$(echo "${KERNEL_VERSION}" | cut -d. -f2)
 
-          if [ "$KV_MAJOR" -lt 4 ] || ([ "$KV_MAJOR" -eq 4 ] && [ "$KV_MINOR" -lt 14 ]); then
-            echo "  Kernel < 4.14 — fixing compiler_types.h includes"
+          KSU_KERNEL_DIR=""
+          for cand in "${KSU_DIR}/kernel" "drivers/kernelsu"; do
+            if [ -d "$cand" ]; then KSU_KERNEL_DIR="$cand"; break; fi
+          done
 
-            # linux/compiler_types.h was split from linux/compiler.h in 4.14
-            # Replace all occurrences in KSU source with linux/compiler.h
-            KSU_KERNEL_DIR=""
-            for cand in "${KSU_DIR}/kernel" "drivers/kernelsu"; do
-              if [ -d "$cand" ]; then KSU_KERNEL_DIR="$cand"; break; fi
-            done
-
-            if [ -n "$KSU_KERNEL_DIR" ]; then
-              FIXED=0
-              while IFS= read -r f; do
-                sed -i 's|#include <linux/compiler_types.h>|#include <linux/compiler.h>|g' "$f"
-                echo "  ✅ Fixed: $f"
-                FIXED=$((FIXED + 1))
-              done < <(grep -rl 'linux/compiler_types.h' "$KSU_KERNEL_DIR" 2>/dev/null || true)
-
-              if [ "$FIXED" -eq 0 ]; then
-                echo "  No compiler_types.h includes found — OK"
-              else
-                echo "  Fixed $FIXED file(s)"
-              fi
-            else
-              echo "  ⚠️  KSU kernel dir not found"
-            fi
-          else
-            echo "  Kernel >= 4.14 — no header compat fix needed"
+          if [ -z "$KSU_KERNEL_DIR" ]; then
+            echo "  ⚠️  KSU kernel dir not found — skipping"
+            exit 0
           fi
+
+          echo "  KSU dir: $KSU_KERNEL_DIR"
+          echo "  Kernel: ${KERNEL_VERSION} (major=${KV_MAJOR}, minor=${KV_MINOR})"
+          FIXES=0
+
+          # === Fix 1: compiler_types.h (introduced 4.14) ===
+          if [ "$KV_MAJOR" -lt 4 ] || ([ "$KV_MAJOR" -eq 4 ] && [ "$KV_MINOR" -lt 14 ]); then
+            echo ""
+            echo "  --- Fix 1: compiler_types.h → compiler.h ---"
+            while IFS= read -r f; do
+              sed -i 's|#include <linux/compiler_types.h>|#include <linux/compiler.h>|g' "$f"
+              echo "    ✅ $f"
+              FIXES=$((FIXES + 1))
+            done < <(grep -rl 'linux/compiler_types.h' "$KSU_KERNEL_DIR" 2>/dev/null || true)
+          fi
+
+          # === Fix 2: __poll_t and EPOLL* (introduced 4.16) ===
+          if [ "$KV_MAJOR" -lt 4 ] || ([ "$KV_MAJOR" -eq 4 ] && [ "$KV_MINOR" -lt 16 ]); then
+            echo ""
+            echo "  --- Fix 2: __poll_t / EPOLL* compat (kernel < 4.16) ---"
+
+            # Create a compat header that maps new poll types to old ones
+            COMPAT_HEADER="$KSU_KERNEL_DIR/ksu_compat_poll.h"
+            cat > "$COMPAT_HEADER" << 'COMPAT_EOF'
+          #ifndef _KSU_COMPAT_POLL_H
+          #define _KSU_COMPAT_POLL_H
+
+          #include <linux/version.h>
+
+          #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 16, 0)
+          /*
+           * Kernel 4.16 introduced __poll_t and EPOLL* constants.
+           * For older kernels, map them back to the POLL* equivalents.
+           */
+          #include <linux/poll.h>
+          #include <asm/poll.h>
+
+          typedef unsigned int __poll_t;
+
+          #ifndef EPOLLIN
+          #define EPOLLIN      POLLIN
+          #endif
+          #ifndef EPOLLOUT
+          #define EPOLLOUT     POLLOUT
+          #endif
+          #ifndef EPOLLHUP
+          #define EPOLLHUP     POLLHUP
+          #endif
+          #ifndef EPOLLERR
+          #define EPOLLERR     POLLERR
+          #endif
+          #ifndef EPOLLRDNORM
+          #define EPOLLRDNORM  POLLRDNORM
+          #endif
+          #ifndef EPOLLWRNORM
+          #define EPOLLWRNORM  POLLWRNORM
+          #endif
+          #ifndef EPOLLRDBAND
+          #define EPOLLRDBAND  POLLRDBAND
+          #endif
+          #ifndef EPOLLWRBAND
+          #define EPOLLWRBAND  POLLWRBAND
+          #endif
+
+          #endif /* LINUX_VERSION_CODE < 4.16.0 */
+          #endif /* _KSU_COMPAT_POLL_H */
+          COMPAT_EOF
+            # Fix indentation in generated file
+            sed -i 's/^          //' "$COMPAT_HEADER"
+            echo "    ✅ Created $COMPAT_HEADER"
+
+            # Find all .c and .h files that use __poll_t or EPOLL*
+            while IFS= read -r f; do
+              # Skip the compat header itself
+              [ "$f" = "$COMPAT_HEADER" ] && continue
+              # Add include at top of file (after existing includes)
+              if ! grep -q 'ksu_compat_poll.h' "$f"; then
+                sed -i '1i\#include "ksu_compat_poll.h"' "$f"
+                echo "    ✅ Injected compat include: $f"
+                FIXES=$((FIXES + 1))
+              fi
+            done < <(grep -rlE '__poll_t|EPOLLIN|EPOLLOUT|EPOLLHUP|EPOLLERR|EPOLLRDNORM|EPOLLWRNORM' "$KSU_KERNEL_DIR" 2>/dev/null || true)
+          fi
+
+          # === Fix 3: struct wait_queue_head → wait_queue_head_t (older naming) ===
+          if [ "$KV_MAJOR" -lt 4 ] || ([ "$KV_MAJOR" -eq 4 ] && [ "$KV_MINOR" -lt 13 ]); then
+            echo ""
+            echo "  --- Fix 3: wait_queue_head struct compat ---"
+            while IFS= read -r f; do
+              # Only fix if struct wait_queue_head is used WITHOUT _t suffix
+              if grep -qP 'struct wait_queue_head[^_]' "$f"; then
+                sed -i 's/struct wait_queue_head\b/wait_queue_head_t/g' "$f"
+                echo "    ✅ Fixed wait_queue_head: $f"
+                FIXES=$((FIXES + 1))
+              fi
+            done < <(grep -rlP 'struct wait_queue_head[^_]' "$KSU_KERNEL_DIR" 2>/dev/null || true)
+          fi
+
+          echo ""
+          echo "  === Total fixes applied: $FIXES ==="
+
 
       - name: Patch lavender DTS fstab (non-dynamic / legacy partition)
         if: ${{ inputs.legacy_fstab == 'true' }}
