@@ -1444,31 +1444,66 @@ jobs:
             done
           fi
 
-          # === Fix 5: in_compat_syscall() (introduced kernel 4.6) ===
-          # KSU-Next legacy sulog/event.c uses in_compat_syscall(); not present on 4.4.
-          # Prepend a self-contained shim (maps to is_compat_task, arm64 CONFIG_COMPAT=y).
-          if [ "$KV_MAJOR" -lt 4 ] || ([ "$KV_MAJOR" -eq 4 ] && [ "$KV_MINOR" -lt 6 ]); then
+          # === Fix 5: force-include compat header for KSU driver (root-cause fix) ===
+          # KSU-Next legacy driver uses kernel macros/functions newer than 4.4
+          # (in_compat_syscall 4.6, ALIGN_DOWN 4.16, etc). Instead of whack-a-mole,
+          # force-include ONE compat header into every KSU compilation unit via
+          # subdir-ccflags-y -include (covers all subdirs: sulog/, feature/, etc).
+          if [ "$KV_MAJOR" -lt 4 ] || ([ "$KV_MAJOR" -eq 4 ] && [ "$KV_MINOR" -lt 16 ]); then
             echo ""
-            echo "  --- Fix 5: in_compat_syscall compat (kernel < 4.6) ---"
-            while IFS= read -r f; do
-              if ! grep -q 'KSU_COMPAT_IN_COMPAT_SYSCALL' "$f"; then
-                tmp=$(mktemp)
-                cat > "$tmp" << 'SHIM_EOF'
+            echo "  --- Fix 5: force-include ksu_compat44.h into KSU driver ---"
+            COMPAT44="$KSU_KERNEL_DIR/ksu_compat44.h"
+            cat > "$COMPAT44" << 'C44_EOF'
+          #ifndef _KSU_COMPAT44_H
+          #define _KSU_COMPAT44_H
+          #include <linux/version.h>
+          #include <linux/kernel.h>
+
+          /* ALIGN_DOWN: introduced 4.16 */
+          #ifndef ALIGN_DOWN
+          #define ALIGN_DOWN(x, a) __ALIGN_KERNEL((x) - ((a) - 1), (a))
+          #endif
+
+          /* in_compat_syscall(): introduced 4.6 (arm64 android has CONFIG_COMPAT=y) */
+          #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 6, 0)
           #include <linux/compat.h>
-          #ifndef KSU_COMPAT_IN_COMPAT_SYSCALL
-          #define KSU_COMPAT_IN_COMPAT_SYSCALL
           #ifndef in_compat_syscall
           #define in_compat_syscall() is_compat_task()
           #endif
           #endif
-          SHIM_EOF
-                sed -i 's/^          //' "$tmp"
-                cat "$f" >> "$tmp"
-                mv "$tmp" "$f"
-                echo "    ✅ shim in_compat_syscall: $f"
-                FIXES=$((FIXES + 1))
-              fi
-            done < <(grep -rlE 'in_compat_syscall' "$KSU_KERNEL_DIR" 2>/dev/null || true)
+
+          /* array_size / struct_size: introduced 4.16 (linux/overflow.h absent on 4.4) */
+          #ifndef array_size
+          #define array_size(a, b) ((a) * (b))
+          #endif
+          #ifndef struct_size
+          #define struct_size(p, member, n) \
+              (sizeof(*(p)) + (n) * sizeof(*(p)->member))
+          #endif
+
+          #endif /* _KSU_COMPAT44_H */
+          C44_EOF
+            sed -i 's/^          //' "$COMPAT44"
+            COMPAT44_ABS="$(realpath "$COMPAT44")"
+            echo "    Created $COMPAT44 (abs: $COMPAT44_ABS)"
+
+            # Locate KSU Kbuild/Makefile and inject force-include for all subdirs
+            KSU_KBUILD=""
+            for cand in "$KSU_KERNEL_DIR/Kbuild" "$KSU_KERNEL_DIR/Makefile" "${KSU_DIR}/kernel/Kbuild" "drivers/kernelsu/Kbuild"; do
+              if [ -f "$cand" ]; then KSU_KBUILD="$cand"; break; fi
+            done
+            if [ -n "$KSU_KBUILD" ]; then
+              {
+                echo ""
+                echo "# === 4.4 compat: force-include compat header (workflow) ==="
+                echo "ccflags-y += -include $COMPAT44_ABS"
+                echo "subdir-ccflags-y += -include $COMPAT44_ABS"
+              } >> "$KSU_KBUILD"
+              echo "    ✅ Force-include appended to $KSU_KBUILD"
+              FIXES=$((FIXES + 1))
+            else
+              echo "::warning::KSU Kbuild not found — force-include not applied"
+            fi
           fi
 
           echo ""
