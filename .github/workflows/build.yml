@@ -1345,6 +1345,185 @@ jobs:
             echo "Kernel >= 4.19 — keeping original selinux_hide.c"
           fi
 
+      - name: Inject Zygisk sepolicy rules into kernel boot rules
+        if: ${{ inputs.pre_patched_kernel != 'true' }}
+        working-directory: kernel_source
+        run: |
+          set -e
+          echo "=== Inject Zygisk/PIF sepolicy rules into apply_kernelsu_rules_fn ==="
+          # On kernel 4.4, the ioctl-based sepolicy (SET_SEPOLICY) fails with EINVAL
+          # because policydb/rwlock internals differ. Instead, inject the rules directly
+          # into the boot-time apply_kernelsu_rules_fn() which already works (root OK).
+
+          RULES_C=""
+          for cand in "${KSU_DIR}/kernel/selinux/rules.c" "drivers/kernelsu/selinux/rules.c"; do
+            if [ -f "$cand" ]; then RULES_C="$cand"; break; fi
+          done
+
+          if [ -z "$RULES_C" ]; then
+            echo "  ⚠️  rules.c not found — skipping"
+            exit 0
+          fi
+
+          echo "  Patching: $RULES_C"
+
+          # The marker: we insert BEFORE "return 0;" in apply_kernelsu_rules_fn
+          # This function already has working policydb access at boot time
+          MARKER="return 0;"
+          # We need to find the FIRST "return 0;" inside apply_kernelsu_rules_fn
+          # which is after the comment "// Allow system server kill su process"
+
+          ZYGISK_RULES='
+              // ============ Zygisk Next sepolicy rules (injected for kernel 4.4 compat) ============
+              // These rules are normally applied via SET_SEPOLICY ioctl from ksud, but on kernel 4.4
+              // the ioctl handler returns -EINVAL due to policydb access issues. Injecting them here
+              // ensures they are applied at boot time via the working stop_machine() path.
+
+              // Zygisk file type
+              ksu_type(db, "magisk_file", "file_type");
+              ksu_typeattribute(db, "magisk_file", "mlstrustedobject");
+              ksu_allow(db, ALL, "magisk_file", "file", ALL);
+              ksu_allow(db, ALL, "magisk_file", "dir", ALL);
+              ksu_allow(db, ALL, "magisk_file", "fifo_file", ALL);
+              ksu_allow(db, ALL, "magisk_file", "chr_file", ALL);
+              ksu_allow(db, ALL, "magisk_file", "lnk_file", ALL);
+              ksu_allow(db, ALL, "magisk_file", "sock_file", ALL);
+
+              // Zygote permissions for Zygisk injection
+              ksu_allow(db, "system_server", "system_server", "process", "execmem");
+              ksu_allow(db, "zygote", "zygote", "process", "execmem");
+              ksu_allow(db, "zygote", "mnt_vendor_file", "dir", "search");
+              ksu_allow(db, "zygote", "system_file", "dir", "mounton");
+              ksu_allow(db, "zygote", "labeledfs", "filesystem", "mount");
+              ksu_allow(db, "zygote", "fs_type", "filesystem", "unmount");
+              ksu_allow(db, "zygote", "unlabeled", "file", "open");
+              ksu_allow(db, "zygote", "unlabeled", "file", "read");
+              ksu_allow(db, "zygote", "unlabeled", "file", "getattr");
+              ksu_allow(db, "zygote", "zygote", "capability", "sys_chroot");
+              ksu_allow(db, "zygote", "nsfs", "file", "open");
+              ksu_allow(db, "zygote", "nsfs", "file", "read");
+
+              // Additional Zygisk daemon permissions
+              ksu_allow(db, "zygote", "zygote", "process", "ptrace");
+              ksu_allow(db, "zygote", "devpts", "chr_file", ALL);
+              ksu_allow(db, "zygote", "tmpfs", "file", ALL);
+              ksu_allow(db, "zygote", "tmpfs", "dir", ALL);
+              ksu_allow(db, "zygote", "toolbox_exec", "file", ALL);
+              ksu_allow(db, "zygote", "shell_exec", "file", ALL);
+              ksu_allow(db, "zygote", "app_data_file", "file", ALL);
+              ksu_allow(db, "zygote", "app_data_file", "dir", ALL);
+              ksu_allow(db, "zygote", "apk_data_file", "file", ALL);
+              ksu_allow(db, "zygote", "apk_data_file", "dir", ALL);
+
+              // ksud daemon permissions
+              ksu_allow(db, "init", "adb_data_file", "file", "execute");
+              ksu_allow(db, "init", "adb_data_file", "file", "execute_no_trans");
+              ksu_allow(db, "init", "tmpfs", "dir", ALL);
+              ksu_allow(db, "init", "tmpfs", "file", ALL);
+              // ============ End Zygisk rules ============
+          '
+
+          # Use python for reliable multi-line insertion
+          python3 << PYEOF
+          import re
+
+          with open("$RULES_C", "r") as f:
+              content = f.read()
+
+          if "magisk_file" in content:
+              print("  ℹ️  Zygisk rules already present in rules.c")
+          else:
+              # Find apply_kernelsu_rules_fn and its closing "return 0;"
+              # The pattern: after "Allow system server kill su process" block, before "return 0;"
+              marker = '    ksu_allow(db, "system_server", KERNEL_SU_DOMAIN, "process", "sigkill");'
+              inject = '''    ksu_allow(db, "system_server", KERNEL_SU_DOMAIN, "process", "sigkill");
+
+              // ======== Zygisk/PIF sepolicy (kernel 4.4 compat - bypasses broken ioctl) ========
+              ksu_type(db, "magisk_file", "file_type");
+              ksu_typeattribute(db, "magisk_file", "mlstrustedobject");
+              ksu_allow(db, ALL, "magisk_file", "file", ALL);
+              ksu_allow(db, ALL, "magisk_file", "dir", ALL);
+              ksu_allow(db, ALL, "magisk_file", "fifo_file", ALL);
+              ksu_allow(db, ALL, "magisk_file", "chr_file", ALL);
+              ksu_allow(db, ALL, "magisk_file", "lnk_file", ALL);
+              ksu_allow(db, ALL, "magisk_file", "sock_file", ALL);
+              ksu_allow(db, "system_server", "system_server", "process", "execmem");
+              ksu_allow(db, "zygote", "zygote", "process", "execmem");
+              ksu_allow(db, "zygote", "mnt_vendor_file", "dir", "search");
+              ksu_allow(db, "zygote", "system_file", "dir", "mounton");
+              ksu_allow(db, "zygote", "labeledfs", "filesystem", "mount");
+              ksu_allow(db, "zygote", "fs_type", "filesystem", "unmount");
+              ksu_allow(db, "zygote", "unlabeled", "file", "open");
+              ksu_allow(db, "zygote", "unlabeled", "file", "read");
+              ksu_allow(db, "zygote", "unlabeled", "file", "getattr");
+              ksu_allow(db, "zygote", "zygote", "capability", "sys_chroot");
+              ksu_allow(db, "zygote", "nsfs", "file", "open");
+              ksu_allow(db, "zygote", "nsfs", "file", "read");
+              ksu_allow(db, "zygote", "zygote", "process", "ptrace");
+              ksu_allow(db, "zygote", "devpts", "chr_file", ALL);
+              ksu_allow(db, "zygote", "tmpfs", "file", ALL);
+              ksu_allow(db, "zygote", "tmpfs", "dir", ALL);
+              ksu_allow(db, "zygote", "app_data_file", "file", ALL);
+              ksu_allow(db, "zygote", "app_data_file", "dir", ALL);
+              ksu_allow(db, "zygote", "apk_data_file", "file", ALL);
+              ksu_allow(db, "zygote", "apk_data_file", "dir", ALL);
+              ksu_allow(db, "init", "adb_data_file", "file", "execute");
+              ksu_allow(db, "init", "adb_data_file", "file", "execute_no_trans");
+              ksu_allow(db, "init", "tmpfs", "dir", ALL);
+              ksu_allow(db, "init", "tmpfs", "file", ALL);
+              // ======== End Zygisk/PIF sepolicy ========'''
+
+              if marker in content:
+                  content = content.replace(marker, inject)
+                  with open("$RULES_C", "w") as f:
+                      f.write(content)
+                  print("  ✅ Injected Zygisk/PIF sepolicy rules into apply_kernelsu_rules_fn")
+              else:
+                  # Fallback: find "return 0;" after "apply_kernelsu_rules_fn"
+                  pattern = r'(static int apply_kernelsu_rules_fn\(void \*ptr\).*?)(    return 0;\n\})'
+                  inject2 = (
+                      '    // ======== Zygisk/PIF sepolicy (kernel 4.4 compat) ========\n'
+                      '    ksu_type(db, "magisk_file", "file_type");\n'
+                      '    ksu_typeattribute(db, "magisk_file", "mlstrustedobject");\n'
+                      '    ksu_allow(db, ALL, "magisk_file", "file", ALL);\n'
+                      '    ksu_allow(db, ALL, "magisk_file", "dir", ALL);\n'
+                      '    ksu_allow(db, ALL, "magisk_file", "fifo_file", ALL);\n'
+                      '    ksu_allow(db, ALL, "magisk_file", "chr_file", ALL);\n'
+                      '    ksu_allow(db, ALL, "magisk_file", "lnk_file", ALL);\n'
+                      '    ksu_allow(db, ALL, "magisk_file", "sock_file", ALL);\n'
+                      '    ksu_allow(db, "system_server", "system_server", "process", "execmem");\n'
+                      '    ksu_allow(db, "zygote", "zygote", "process", "execmem");\n'
+                      '    ksu_allow(db, "zygote", "mnt_vendor_file", "dir", "search");\n'
+                      '    ksu_allow(db, "zygote", "system_file", "dir", "mounton");\n'
+                      '    ksu_allow(db, "zygote", "labeledfs", "filesystem", "mount");\n'
+                      '    ksu_allow(db, "zygote", "fs_type", "filesystem", "unmount");\n'
+                      '    ksu_allow(db, "zygote", "unlabeled", "file", "open");\n'
+                      '    ksu_allow(db, "zygote", "unlabeled", "file", "read");\n'
+                      '    ksu_allow(db, "zygote", "unlabeled", "file", "getattr");\n'
+                      '    ksu_allow(db, "zygote", "zygote", "capability", "sys_chroot");\n'
+                      '    ksu_allow(db, "zygote", "nsfs", "file", "open");\n'
+                      '    ksu_allow(db, "zygote", "nsfs", "file", "read");\n'
+                      '    ksu_allow(db, "zygote", "zygote", "process", "ptrace");\n'
+                      '    ksu_allow(db, "zygote", "devpts", "chr_file", ALL);\n'
+                      '    ksu_allow(db, "zygote", "tmpfs", "file", ALL);\n'
+                      '    ksu_allow(db, "zygote", "tmpfs", "dir", ALL);\n'
+                      '    ksu_allow(db, "zygote", "app_data_file", "file", ALL);\n'
+                      '    ksu_allow(db, "zygote", "app_data_file", "dir", ALL);\n'
+                      '    ksu_allow(db, "init", "adb_data_file", "file", "execute");\n'
+                      '    ksu_allow(db, "init", "adb_data_file", "file", "execute_no_trans");\n'
+                      '    ksu_allow(db, "init", "tmpfs", "dir", ALL);\n'
+                      '    ksu_allow(db, "init", "tmpfs", "file", ALL);\n'
+                      '    // ======== End Zygisk/PIF sepolicy ========\n\n'
+                  )
+                  new_content = re.sub(pattern, r'\1' + inject2 + r'\2', content, count=1, flags=re.DOTALL)
+                  if new_content != content:
+                      with open("$RULES_C", "w") as f:
+                          f.write(new_content)
+                      print("  ✅ Injected Zygisk rules via regex fallback")
+                  else:
+                      print("  ⚠️  Could not find insertion point in rules.c")
+          PYEOF
+
       - name: Fix KSU-Next header compat for kernel 4.4
         if: ${{ inputs.pre_patched_kernel != 'true' }}
         working-directory: kernel_source
