@@ -1997,11 +1997,116 @@ jobs:
             [ -f "$f" ] && cp "$f" AnyKernel3/ || true
           done
 
+          # === Download ksud binary for FBE fix ===
+          echo "=== Downloading ksud for FBE system install ==="
+          KSUN_TAG="${{ inputs.ksun_branch }}"
+          # For 'legacy' branch, find latest legacy release tag
+          if [ "$KSUN_TAG" = "legacy" ] || [ "$KSUN_TAG" = "head" ]; then
+            # Use the KSUN version we detected during build
+            KSUN_TAG=$(echo "${KSUN_VERSION}" | sed 's/-legacy$//')
+            echo "  Using KSUN tag: ${KSUN_TAG}"
+          fi
+          # Try downloading ksud from release, fallback to latest
+          KSUD_URL="https://github.com/${{ inputs.ksun_repo }}/releases/download/${KSUN_TAG}/ksud-aarch64-linux-android"
+          echo "  Trying: ${KSUD_URL}"
+          if ! curl -fsSL -o AnyKernel3/ksud "${KSUD_URL}" 2>/dev/null; then
+            echo "  Tag ${KSUN_TAG} not found, trying latest release..."
+            KSUD_URL="https://github.com/${{ inputs.ksun_repo }}/releases/latest/download/ksud-aarch64-linux-android"
+            if ! curl -fsSL -o AnyKernel3/ksud "${KSUD_URL}" 2>/dev/null; then
+              echo "  ::warning::Could not download ksud — FBE fix will not be included"
+              KSUD_AVAILABLE=false
+            else
+              KSUD_AVAILABLE=true
+            fi
+          else
+            KSUD_AVAILABLE=true
+          fi
+
+          if [ "$KSUD_AVAILABLE" = "true" ]; then
+            chmod 755 AnyKernel3/ksud
+            ls -la AnyKernel3/ksud
+            echo "  ✅ ksud binary included in zip"
+
+            # Create ksud init.rc (included in zip, installed by anykernel.sh)
+            cat > AnyKernel3/ksud.rc << 'RCEOF'
+# KernelSU Next daemon - runs from /system/bin to bypass FBE encryption
+# Installed by C9-Kernel AnyKernel3 flashable zip
+
+service ksud-post-fs-data /system/bin/ksud post-fs-data
+    user root
+    seclabel u:r:ksu:s0
+    oneshot
+    disabled
+
+service ksud-services /system/bin/ksud services
+    user root
+    seclabel u:r:ksu:s0
+    oneshot
+    disabled
+
+service ksud-boot-completed /system/bin/ksud boot-completed
+    user root
+    seclabel u:r:ksu:s0
+    oneshot
+    disabled
+
+on post-fs-data
+    start ksud-post-fs-data
+
+on property:vold.decrypt=trigger_restart_framework
+    start ksud-services
+
+on property:sys.boot_completed=1
+    start ksud-boot-completed
+RCEOF
+          fi
+
+          # === Patch anykernel.sh to install ksud + init.rc ===
+          # Insert ksud install commands BEFORE flash_boot
+          if [ "$KSUD_AVAILABLE" = "true" ]; then
+            sed -i '/^flash_boot;/i \
+# === FBE Fix: Install ksud to /system/bin ===\
+# On FBE-encrypted devices, init cannot exec /data/adb/ksud at boot.\
+# Installing to /system/bin bypasses this limitation.\
+ui_print " ";\
+ui_print "Installing ksud to /system...";\
+mount /system 2>/dev/null;\
+mount -o rw,remount /system 2>/dev/null;\
+mount -o rw,remount /system_root 2>/dev/null;\
+# Detect system path (A-only vs A/B)\
+if [ -d /system_root/system ]; then\
+  SYSBIN=/system_root/system/bin;\
+  SYSINIT=/system_root/system/etc/init;\
+elif [ -d /system/bin ]; then\
+  SYSBIN=/system/bin;\
+  SYSINIT=/system/etc/init;\
+fi;\
+if [ -n "$SYSBIN" ]; then\
+  cp -f $AKHOME/ksud $SYSBIN/ksud;\
+  chmod 755 $SYSBIN/ksud;\
+  chown 0:0 $SYSBIN/ksud;\
+  mkdir -p $SYSINIT;\
+  cp -f $AKHOME/ksud.rc $SYSINIT/ksud.rc;\
+  chmod 644 $SYSINIT/ksud.rc;\
+  chown 0:0 $SYSINIT/ksud.rc;\
+  # Also ensure /data/adb/ksud exists for Manager\
+  mkdir -p /data/adb;\
+  cp -f $AKHOME/ksud /data/adb/ksud;\
+  chmod 755 /data/adb/ksud;\
+  chown 0:0 /data/adb/ksud;\
+  ui_print "  ksud installed to $SYSBIN/ksud";\
+  ui_print "  init.rc installed to $SYSINIT/ksud.rc";\
+else\
+  ui_print "  WARNING: Could not find /system/bin";\
+fi;\
+ui_print " ";\
+# === End FBE Fix ===' AnyKernel3/anykernel.sh
+            echo "  ✅ anykernel.sh patched with ksud install"
+          fi
+
           # San-Kernel style naming: C9-Kernel-<Codename>-R<Ver>-<Device>-KSUN.zip
-          # Example: C9-Kernel-Phoenix-R1.0-Lavender-KSUN.zip
           DEVICE_CODENAME=$(basename "${DCFG_NAME}" | sed 's|_defconfig$||; s|-perf_defconfig$||; s|-perf$||')
           echo "DEVICE_CODENAME=${DEVICE_CODENAME}" >> $GITHUB_ENV
-          # Capitalize first letter for device label (lavender -> Lavender)
           DEVICE_LABEL=$(echo "${DEVICE_CODENAME}" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')
           KERNEL_CODENAME="${{ inputs.kernel_codename }}"
           KERNEL_RELVER="${{ inputs.kernel_relver }}"
