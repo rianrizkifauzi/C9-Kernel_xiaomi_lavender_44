@@ -2053,6 +2053,11 @@ service ksud-boot-completed /system/bin/ksud boot-completed
 on post-fs-data
     start ksud-post-fs-data
 
+# FBE: framework starts without vold.decrypt, trigger on zygote-start
+on zygote-start
+    start ksud-services
+
+# FDE fallback: trigger_restart_framework fires after decrypt
 on property:vold.decrypt=trigger_restart_framework
     start ksud-services
 
