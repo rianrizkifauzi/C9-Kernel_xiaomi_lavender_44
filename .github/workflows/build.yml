@@ -2053,42 +2053,46 @@ jobs:
             echo "  ✅ ksud binary included in zip"
 
             # Create ksud init.rc (included in zip, installed by anykernel.sh)
-            cat > AnyKernel3/ksud.rc << 'RCEOF'
-# KernelSU Next daemon - runs from /system/bin to bypass FBE encryption
-# Installed by C9-Kernel AnyKernel3 flashable zip
+            python3 -c "
+          rc = '''# KernelSU Next daemon - runs from /system/bin to bypass FBE encryption
+          # Installed by C9-Kernel AnyKernel3 flashable zip
+          # Compatible with both FDE and FBE encrypted devices
 
-service ksud-post-fs-data /system/bin/ksud post-fs-data
-    user root
-    seclabel u:r:ksu:s0
-    oneshot
-    disabled
+          service ksud-post-fs-data /system/bin/ksud post-fs-data
+              user root
+              seclabel u:r:ksu:s0
+              oneshot
+              disabled
 
-service ksud-services /system/bin/ksud services
-    user root
-    seclabel u:r:ksu:s0
-    oneshot
-    disabled
+          service ksud-services /system/bin/ksud services
+              user root
+              seclabel u:r:ksu:s0
+              oneshot
+              disabled
 
-service ksud-boot-completed /system/bin/ksud boot-completed
-    user root
-    seclabel u:r:ksu:s0
-    oneshot
-    disabled
+          service ksud-boot-completed /system/bin/ksud boot-completed
+              user root
+              seclabel u:r:ksu:s0
+              oneshot
+              disabled
 
-on post-fs-data
-    start ksud-post-fs-data
+          on post-fs-data
+              start ksud-post-fs-data
 
-# FBE: framework starts without vold.decrypt, trigger on zygote-start
-on zygote-start
-    start ksud-services
+          on zygote-start
+              start ksud-services
 
-# FDE fallback: trigger_restart_framework fires after decrypt
-on property:vold.decrypt=trigger_restart_framework
-    start ksud-services
+          on property:vold.decrypt=trigger_restart_framework
+              start ksud-services
 
-on property:sys.boot_completed=1
-    start ksud-boot-completed
-RCEOF
+          on property:sys.boot_completed=1
+              start ksud-boot-completed
+          '''
+          import textwrap
+          with open('AnyKernel3/ksud.rc', 'w') as f:
+              f.write(textwrap.dedent(rc))
+          print('  ✅ ksud.rc created')
+          "
           fi
 
           # === Patch anykernel.sh to install ksud + init.rc ===
