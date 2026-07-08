@@ -1524,6 +1524,31 @@ jobs:
                       print("  ⚠️  Could not find insertion point in rules.c")
           PYEOF
 
+      - name: Patch ksud path for FBE device compat
+        if: ${{ inputs.pre_patched_kernel != 'true' }}
+        working-directory: kernel_source
+        run: |
+          set -e
+          echo "=== Patch ksud path: /data/adb/ksud → /system/bin/ksud ==="
+          echo "On FBE-encrypted devices, init cannot exec from /data/adb at boot."
+          echo "Changing the kernel's ksud path to /system/bin/ksud fixes this."
+
+          # Find all KSU source files that reference /data/adb/ksud
+          PATCHED=0
+          for f in $(grep -rl '/data/adb/ksud' ${KSU_DIR}/ 2>/dev/null); do
+            echo "  Patching: $f"
+            sed -i 's|/data/adb/ksud|/system/bin/ksud|g' "$f"
+            PATCHED=$((PATCHED + 1))
+          done
+
+          if [ "$PATCHED" -gt 0 ]; then
+            echo "  ✅ Patched $PATCHED file(s)"
+            # Verify the change
+            grep -rn '/system/bin/ksud' ${KSU_DIR}/ | head -5
+          else
+            echo "  ⚠️  No files found with /data/adb/ksud path"
+          fi
+
       - name: Fix KSU-Next header compat for kernel 4.4
         if: ${{ inputs.pre_patched_kernel != 'true' }}
         working-directory: kernel_source
