@@ -2064,44 +2064,57 @@ RCEOF
           # === Patch anykernel.sh to install ksud + init.rc ===
           # Insert ksud install commands BEFORE flash_boot
           if [ "$KSUD_AVAILABLE" = "true" ]; then
-            sed -i '/^flash_boot;/i \
-# === FBE Fix: Install ksud to /system/bin ===\
-# On FBE-encrypted devices, init cannot exec /data/adb/ksud at boot.\
-# Installing to /system/bin bypasses this limitation.\
-ui_print " ";\
-ui_print "Installing ksud to /system...";\
-mount /system 2>/dev/null;\
-mount -o rw,remount /system 2>/dev/null;\
-mount -o rw,remount /system_root 2>/dev/null;\
-# Detect system path (A-only vs A/B)\
-if [ -d /system_root/system ]; then\
-  SYSBIN=/system_root/system/bin;\
-  SYSINIT=/system_root/system/etc/init;\
-elif [ -d /system/bin ]; then\
-  SYSBIN=/system/bin;\
-  SYSINIT=/system/etc/init;\
-fi;\
-if [ -n "$SYSBIN" ]; then\
-  cp -f $AKHOME/ksud $SYSBIN/ksud;\
-  chmod 755 $SYSBIN/ksud;\
-  chown 0:0 $SYSBIN/ksud;\
-  mkdir -p $SYSINIT;\
-  cp -f $AKHOME/ksud.rc $SYSINIT/ksud.rc;\
-  chmod 644 $SYSINIT/ksud.rc;\
-  chown 0:0 $SYSINIT/ksud.rc;\
-  # Also ensure /data/adb/ksud exists for Manager\
-  mkdir -p /data/adb;\
-  cp -f $AKHOME/ksud /data/adb/ksud;\
-  chmod 755 /data/adb/ksud;\
-  chown 0:0 /data/adb/ksud;\
-  ui_print "  ksud installed to $SYSBIN/ksud";\
-  ui_print "  init.rc installed to $SYSINIT/ksud.rc";\
-else\
-  ui_print "  WARNING: Could not find /system/bin";\
-fi;\
-ui_print " ";\
-# === End FBE Fix ===' AnyKernel3/anykernel.sh
-            echo "  ✅ anykernel.sh patched with ksud install"
+            python3 << 'PYEOF'
+          import os
+          aksh = "AnyKernel3/anykernel.sh"
+          with open(aksh, "r") as f:
+              content = f.read()
+
+          fbe_fix = '''
+# === FBE Fix: Install ksud to /system/bin ===
+# On FBE-encrypted devices, init cannot exec /data/adb/ksud at boot.
+# Installing to /system/bin bypasses this limitation.
+ui_print " ";
+ui_print "Installing ksud to /system...";
+mount /system 2>/dev/null;
+mount -o rw,remount /system 2>/dev/null;
+mount -o rw,remount /system_root 2>/dev/null;
+if [ -d /system_root/system ]; then
+  SYSBIN=/system_root/system/bin;
+  SYSINIT=/system_root/system/etc/init;
+elif [ -d /system/bin ]; then
+  SYSBIN=/system/bin;
+  SYSINIT=/system/etc/init;
+fi;
+if [ -n "$SYSBIN" ]; then
+  cp -f $AKHOME/ksud $SYSBIN/ksud;
+  chmod 755 $SYSBIN/ksud;
+  chown 0:0 $SYSBIN/ksud;
+  mkdir -p $SYSINIT;
+  cp -f $AKHOME/ksud.rc $SYSINIT/ksud.rc;
+  chmod 644 $SYSINIT/ksud.rc;
+  chown 0:0 $SYSINIT/ksud.rc;
+  mkdir -p /data/adb;
+  cp -f $AKHOME/ksud /data/adb/ksud;
+  chmod 755 /data/adb/ksud;
+  chown 0:0 /data/adb/ksud;
+  ui_print "  ksud installed to $SYSBIN/ksud";
+  ui_print "  init.rc installed to $SYSINIT/ksud.rc";
+else
+  ui_print "  WARNING: Could not find /system/bin";
+fi;
+ui_print " ";
+# === End FBE Fix ===
+
+'''
+          if "flash_boot;" in content:
+              content = content.replace("flash_boot;", fbe_fix + "flash_boot;")
+              with open(aksh, "w") as f:
+                  f.write(content)
+              print("  ✅ anykernel.sh patched with ksud FBE fix")
+          else:
+              print("  ⚠️  Could not find flash_boot; in anykernel.sh")
+          PYEOF
           fi
 
           # San-Kernel style naming: C9-Kernel-<Codename>-R<Ver>-<Device>-KSUN.zip
