@@ -1027,7 +1027,7 @@ jobs:
             # Compatibility floor: KSU-Next Manager v3.3.0 = versionCode 33214.
             # If the (pinned/legacy) driver reports a lower commit count, spoof up
             # to 33214 so the LATEST manager accepts the driver ("Working").
-            MGR_MIN=33214
+            MGR_MIN=33294
             if ! echo "$FORCED_VERSION" | grep -Eq '^[0-9]+$'; then FORCED_VERSION=$MGR_MIN; fi
             if [ "$FORCED_VERSION" -lt "$MGR_MIN" ]; then
               echo "  Driver version $FORCED_VERSION < manager floor $MGR_MIN -> spoofing to $MGR_MIN"
