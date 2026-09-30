@@ -1111,9 +1111,9 @@ jobs:
               if 'KERNEL_SU_UAPI_VERSION' not in content:
                   content = content.replace(
                       '#define __KSU_UAPI_SUPERCALL_H',
-                      '#define __KSU_UAPI_SUPERCALL_H\n\n// UAPI version for Manager compat\nstatic const __u32 KERNEL_SU_UAPI_VERSION = 2;',
+                      '#define __KSU_UAPI_SUPERCALL_H\n\n// UAPI version for Manager compat\nstatic const __u32 KERNEL_SU_UAPI_VERSION = 4;',
                   )
-                  print(f'  ✅ Added KERNEL_SU_UAPI_VERSION=2 to {uapi}')
+                  print(f'  ✅ Added KERNEL_SU_UAPI_VERSION=4 to {uapi}')
                   modified = True
 
               # 2. Add uapi_version field to ksu_get_info_cmd
@@ -1249,6 +1249,14 @@ jobs:
           PYEOF
 
           echo "  === UAPI patch complete ==="
+
+          # === IOCTL remap for manager v3.4.0 (sends _IOR with struct size) ===
+          DISPATCH=$(find . -name "dispatch.c" -path "*/supercall/*" -type f 2>/dev/null | head -1)
+          if [ -f "$DISPATCH" ] && ! grep -q "remap new-style" "$DISPATCH"; then
+            echo "aW1wb3J0IHN5cwpmID0gc3lzLmFyZ3ZbMV0Kd2l0aCBvcGVuKGYpIGFzIGZoOgogICAgc3JjID0gZmgucmVhZCgpCnRhcmdldCA9ICJsb25nIGtzdV9zdXBlcmNhbGxfaGFuZGxlX2lvY3RsKHVuc2lnbmVkIGludCBjbWQsIHZvaWQgX191c2VyICphcmdwKVxue1xuXHRpbnQgaTsiCmluamVjdCA9ICJcblxuXHQvKiByZW1hcCBuZXctc3R5bGUgR0VUX0lORk8gaW9jdGwgKHdpdGggc3RydWN0IHNpemUpIHRvIGxlZ2FjeSBoYW5kbGVyICovXG5cdGlmIChfSU9DX1RZUEUoY21kKSA9PSAnSycgJiYgX0lPQ19OUihjbWQpID09IDIgJiYgKF9JT0NfRElSKGNtZCkgJiBfSU9DX1JFQUQpKVxuXHRcdHJldHVybiBkb19nZXRfaW5mbyhhcmdwKTsiCmlmIHRhcmdldCBpbiBzcmM6CiAgICBzcmMgPSBzcmMucmVwbGFjZSh0YXJnZXQsIHRhcmdldCArIGluamVjdCkKICAgIHdpdGggb3BlbihmLCAidyIpIGFzIGZoOgogICAgICAgIGZoLndyaXRlKHNyYykKICAgIHByaW50KCIgIEluamVjdGVkIElPQ1RMIHJlbWFwIGludG8ga3N1X3N1cGVyY2FsbF9oYW5kbGVfaW9jdGwiKQplbHNlOgogICAgcHJpbnQoIiAgV0FSTklORzogaGFuZGxlciBwYXR0ZXJuIG5vdCBmb3VuZCBpbiAiICsgZikK" | base64 -d | python3 - "$DISPATCH"
+          fi
+          echo "  === Verify IOCTL remap ==="
+          grep -A10 "ksu_supercall_handle_ioctl" "$DISPATCH" | head -14
 
       - name: Fix KSU-Next SELinux compat for kernel 4.4
         if: ${{ inputs.pre_patched_kernel != 'true' }}
