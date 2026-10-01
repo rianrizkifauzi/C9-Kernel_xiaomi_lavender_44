@@ -1015,7 +1015,7 @@ jobs:
           if [ -f "$KBUILD_FILE" ]; then
             # Read the actual git tag/commit count from KSU repo
             cd "${KSU_DIR}"
-            KSU_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v3.3.0")
+            KSU_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v3.4.0")
             KSU_COMMIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo "1000")
             cd ..
 
