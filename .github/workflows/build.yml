@@ -2035,9 +2035,9 @@ jobs:
           KSUN_TAG="${{ inputs.ksun_branch }}"
           # For 'legacy' branch, find latest legacy release tag
           if [ "$KSUN_TAG" = "legacy" ] || [ "$KSUN_TAG" = "head" ]; then
-            # FORCE v3.3.0 - legacy tag resolves to v3.2.0 which has SELinux/init issues
-            KSUN_TAG="v3.3.0"
-            echo "  Forced KSUN tag: ${KSUN_TAG} (legacy ksud has init exec bugs)"
+            # FORCE v3.4.0 - v3.3.0 ksud cant mount modules properly
+            KSUN_TAG="v3.4.0"
+            echo "  Forced KSUN tag: ${KSUN_TAG} (v3.4.0 ksud for module mount fix)"
           fi
           # Try downloading ksud from release, fallback to latest
           KSUD_URL="https://github.com/${{ inputs.ksun_repo }}/releases/download/${KSUN_TAG}/ksud-aarch64-linux-android"
